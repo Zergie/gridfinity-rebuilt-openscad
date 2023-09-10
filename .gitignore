@@ -2,7 +2,6 @@
 ignore/
 gridfinity-rebuilt.json
 gridfinity-rebuilt-bins.json
-stl/
 batch/
 site/
 *.json
