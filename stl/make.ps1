@@ -24,12 +24,10 @@ foreach ($divx in 1..6) {
                         foreach ($scoop in @(0, 1)) {
 
                             $continue = $true
-                            $continue = $continue -and ($gridx / $divx) -ge 0.25
-                            # $continue = $continue -and (($gridx / $divx) -le 1.0)
-                            $continue = $continue -and (($gridy / $divy) -ge 1.0)
-                            # $continue = $continue -and (($gridy / $divy) -le 1.0)
+                            $continue = $continue -and ($gridx / $divx) -ge 0.33
 
                             if ($scoop -ne 0 -or $style_tab -ne 5) {
+                                $continue = $continue -and (($gridy / $divy) -ge 1)
                                 $continue = $continue -and ($gridy -eq 1)
                             }
 
@@ -39,41 +37,70 @@ foreach ($divx in 1..6) {
                             }
                             
                             if ($continue) {
+                                $parameter.Add([pscustomobject]@{
+                                    divx      = $divx
+                                    divy      = $divy
+                                    gridz     = $gridz
+                                    gridx     = $gridx
+                                    gridy     = $gridy
+                                    style_tab = $style_tab
+                                    scoop     = $scoop
+                                }) | Out-Null
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+$parameter.Add([pscustomobject]@{
+    divx      = 2
+    divy      = 4
+    gridz     = 6
+    gridx     = 1
+    gridy     = 2
+    style_tab = 5
+    scoop     = 0
+}) | Out-Null
+
+$json = [System.Collections.ArrayList]::new()
+$parameter |
+ForEach-Object {
 @"
 {
     "div_base_x": "0",
     "div_base_y": "0",
-    "divx": "$divx",
-    "divy": "$divy",
+    "divx": "$($_.divx)",
+    "divy": "$($_.divy)",
     "enable_zsnap": "false",
-    "gridx": "$gridx",
-    "gridy": "$gridy",
-    "gridz": "$gridz",
+    "gridx": "$($_.gridx)",
+    "gridy": "$($_.gridy)",
+    "gridz": "$($_.gridz)",
     "gridz_define": "0",
     "height_internal": "0",
     "only_corners": "false",
-    "scoop": "$scoop",
+    "scoop": "$($_.scoop)",
     "style_hole": "3",
     "style_lip": "0",
-    "style_tab": "$style_tab",
+    "style_tab": "$($_.style_tab)",
     "filename": "$(
         [System.IO.Path]::Combine(
-            "${divx}",
-            "x${gridz}",
+            "$($_.divx * $_.divy)",
+            "x$($_.gridz)",
             (@(
-                if ($scoop -eq 0){"noscoop"}
-                if ($style_tab -eq 5){"notab"}
+                if ($_.scoop -eq 0){"noscoop"}
+                if ($_.style_tab -eq 5){"notab"}
             ) | Join-String -Separator "-"),
-            "${gridx}x${gridy}"
+            "$($_.gridx)x$($_.gridy)"
         ).Replace("\","/")
     )"
 }
-"@ |
+"@ } |
     ConvertFrom-Json -AsHashtable |
-    ForEach-Object { $parameter.Add($_) } |
+    ForEach-Object { $json.Add($_) } |
     Out-Null
-}}}}}}}}
-
 Push-Location $PSScriptRoot
 
 Get-Process openscad -ErrorAction SilentlyContinue |
@@ -102,7 +129,7 @@ Get-ChildItem -Recurse -Filter *.stl |
                         "$PSScriptRoot",
                         ($_.FullName -replace "\.stl", "")
                     ).Replace("\","/")
-        $filename -notin $parameter.filename } |
+        $filename -notin $json.filename } |
     ForEach-Object {
         Write-Host -ForegroundColor Red "deleting $_"; $_
     } |
@@ -111,8 +138,8 @@ Get-ChildItem -Recurse -Filter *.stl |
 # build stl files
 Write-Progress -Activity "building stl files" -PercentComplete 1
 $done = 0
-$overall = ($parameter | Measure-Object).Count
-$parameter |
+$overall = ($json | Measure-Object).Count
+$json |
     ForEach-Object -Parallel {
         Start-Sleep -Milliseconds (Get-Random -Minimum 100 -Maximum 500)
 
@@ -158,5 +185,10 @@ Get-Process openscad -ErrorAction SilentlyContinue |
     ForEach-Object `
         -Begin   { Start-Sleep -Seconds 1 } `
         -Process { $_.WaitForExit() }
+
+# delete empty directories
+Get-ChildItem -Directory -Recurse |
+    Where-Object { ($_ | Get-ChildItem -Recurse -File | Measure-Object).Count -eq 0 } |
+    Remove-Item -Recurse -Force
 
 Pop-Location
