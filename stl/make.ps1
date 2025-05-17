@@ -11,7 +11,7 @@ param(
     $Processes = 10
 )
 
-$openscad = "C:\Program Files\OpenSCAD\openscad.exe"
+$openscad = . $PSScriptRoot\..\Get-OpenScad.ps1 
 $scadFile = (Resolve-Path "$PSScriptRoot\..\gridfinity-rebuilt-bins.scad").Path
 
 $parameter = [System.Collections.ArrayList]::new()
