@@ -6,11 +6,15 @@ param(
 
     [Parameter(ParameterSetName="BuildParameterSet")]
     [switch]
-    $BuildHtml,
+    $BuildMarkdown,
+    
+    [Parameter(ParameterSetName="BuildParameterSet")]
+    [switch]
+    $BuildImages,
 
     [Parameter(ParameterSetName="BuildParameterSet")]
     [switch]
-    $Rebuild,
+    $Force,
 
     [Parameter(ParameterSetName="BuildParameterSet")]
     [int]
@@ -18,14 +22,17 @@ param(
 )
 $ErrorActionPreference = 'Break'
 $Debug = $PSBoundParameters.Debug
-if (!$BuildStls-and !$BuildHtml) {
+if (!$BuildStls -and !$BuildMarkdown -and !$BuildImages) {
     $BuildStls = $true
-    $BuildHtml = $true
+    $BuildMarkdown = $true
+    $BuildImages = $true
 }
-
-$openscad = . $PSScriptRoot\..\Get-OpenScad.ps1
-$scadFile = (Resolve-Path "$PSScriptRoot\..\UltraLightGridfinityBins.scad").Path
+Write-Host -ForegroundColor Magenta $PSScriptRoot
+$openscad      = . $PSScriptRoot\..\Get-OpenScad.ps1
+$scadFile      = (Resolve-Path "$PSScriptRoot\..\UltraLightGridfinityBins.scad").Path
 $parameterFile = (Resolve-Path "$PSScriptRoot\config.json").Path
+$basedir       = [System.IO.Path]::GetDirectoryName($PSScriptRoot)
+$tempdir       =  (New-Item -ItemType Directory -Path "$env:TEMP\$([System.IO.Path]::GetRandomFileName())" ).FullName
 
 $json = [System.Collections.ArrayList]::new()
 ForEach-Object {@(
@@ -72,6 +79,19 @@ ForEach-Object {@(
             }
 
             if ($yieldItem) {
+                $item.OpenScad = [PSCustomObject]@{
+                    Path      = $openscad
+                    File      = $scadFile
+                    Arguments = $item.GetEnumerator() |
+                        ForEach-Object `
+                            -Process { "-D '$($_.Name)=$($_.Value)'" } `
+                            -End {
+                                "-p '$($parameterFile)'"
+                                "-P 'make.ps1'"
+                            } |
+                        Join-String -Separator " "
+                }
+                
                 $item.filename = @(
                         $item.Grids_X
                         "x"
@@ -82,23 +102,36 @@ ForEach-Object {@(
                         if ($item.Scoops -eq $false){"_noscoop"}
                         if ($item.Labels -eq $false){"_notab"}
                     ) | Join-String -Separator ""
-                $item.filename = "STLs/$($item.filename)"
+                $item.Paths = [PSCustomObject]@{
+                    Stl = [System.IO.Path]::GetFullPath(
+                        [System.IO.Path]::Combine($PSScriptRoot, "STLS", $item.filename + ".stl")
+                    )
+                    Image = [System.IO.Path]::GetFullPath(
+                        [System.IO.Path]::Combine($PSScriptRoot, "Images", $item.filename + ".png")
+                    )
+                    Temp = $tempdir
+                }
+
                 $item | ConvertTo-Json | Write-Debug
                 $json.Add($item) | Out-Null
             }
         }
-    } 
-    
-if ($BuildStls) {
-    Push-Location $PSScriptRoot
+    }
+ 
+function Clear-Directory {
+    param ( 
+        # Specifies a path to one or more locations.
+        [Parameter(Position=0)]
+        [string]
+        $Path = $PSScriptRoot,
 
-    Get-Process openscad -ErrorAction SilentlyContinue |
-        Stop-Process -Force
+        [string] $Filter 
+    )
 
-    $basedir = [System.IO.Path]::GetDirectoryName($PSScriptRoot)
-    if ($Rebuild) {
+    if ($Force) {
+        # remove ALL files
         @(
-            Get-ChildItem -Recurse -Filter *.stl
+            Get-ChildItem $Path -Recurse -Filter $Filter
         ) |
             ForEach-Object {
                 Write-Host -ForegroundColor Red "deleting .$($_.FullName.SubString($basedir.Length).Replace("\","/"))"; $_
@@ -111,39 +144,58 @@ if ($BuildStls) {
                         Where-Object{ (Get-ChildItem $_ | Measure-Object).Count -eq 0} |
                         Remove-Item
                 }
+    } else {
+        # remove files not listed in the JSON configuration
+        Get-ChildItem $Path -Recurse -Filter $Filter |
+            Where-Object {
+                $filename = [System.IO.Path]::GetFileNameWithoutExtension($_.FullName)
+                $filename -notin $json.filename } |
+            ForEach-Object {
+                Write-Host -ForegroundColor Red "deleting .$($_.FullName.SubString($basedir.Length).Replace("\","/"))"; $_
+            } |
+            Remove-Item -Confirm
     }
+}
 
-    # remove STL files not listed in the JSON configuration
-    Get-ChildItem -Recurse -Filter *.stl |
-        Where-Object {
-            $filename = [System.IO.Path]::GetRelativePath(
-                            "$PSScriptRoot",
-                            ($_.FullName -replace "\.stl", "")
-                        ).Replace("\","/")
-            $filename -notin $json.filename } |
-        ForEach-Object {
-            Write-Host -ForegroundColor Red "deleting .$($_.FullName.SubString($basedir.Length).Replace("\","/"))"; $_
-        } |
-        Remove-Item -Confirm
-
-    # build stl files
-    Write-Progress -Activity "building stl files" -PercentComplete 1
+function Get-Configurations {
+    param(
+        [string] $Activity = "test",
+        [switch] $Delay
+    )
+    Write-Progress -Activity $Activity -PercentComplete 1
     $done = 0
     $overall = ($json | Measure-Object).Count
-    $json |
-        ForEach-Object -Parallel {
+    foreach ($item in $json) {
+        if ($Delay) {
             Start-Sleep -Milliseconds (Get-Random -Minimum 100 -Maximum 500)
+        }
 
-            $openscad      = $using:openscad
-            $parameterFile = $using:parameterFile
-            $Debug         = $using:Debug
+        $done += 1.0
+        $percent = 1 + [Math]::Round(99 * $done / $overall, 1)
+        $p = @{
+            Activity = $Activity
+            Status   = "$done / $overall - $($percent.ToString("0.0")) %"
+            PercentComplete = [Math]::Floor($percent)
+        }
+        Write-Progress @p
 
+        $item
+    }
+    Write-Progress -Activity $Activity -Completed
+}
+
+if ($BuildStls) {
+    Push-Location $PSScriptRoot/STLs
+
+    Get-Process openscad -ErrorAction SilentlyContinue |
+        Stop-Process -Force
+
+    Clear-Directory . -Filter *.stl
+
+    Get-Configurations -Activity "building stl files" -Delay |
+        ForEach-Object -Parallel {
             $filename = $_.filename
-            $arguments = $_.GetEnumerator() |
-                ForEach-Object { "-D '$($_.Name)=$($_.Value)'" } |
-                Join-String -Separator " "
-            $arguments += "-p '$($parameterFile)'"
-            $arguments += "-P 'make.ps1'"
+            $openscad = $_.OpenScad
 
             if (!(Test-Path "$filename.stl")) {
                 $process = Get-Process openscad -ErrorAction SilentlyContinue
@@ -158,27 +210,17 @@ if ($BuildStls) {
                     mkdir $directory -ErrorAction SilentlyContinue | Out-Null
                 }
 
-                ". '$openscad' '$using:scadFile' $arguments --export-format binstl -o '$filename.stl'" |
+                ". '$($openscad.Path)' '$($openscad.File)' $($openscad.Arguments) --export-format binstl -o '$filename.stl'" |
                     ForEach-Object {
-                        if ($Debug) {
+                        if ($using:Debug) {
                             Write-Host -ForegroundColor Yellow $_
                         }
                         Write-Host -ForegroundColor Green "building $filename.stl"
                         Invoke-Expression $_
                     }
             }
+        } 
 
-            1
-        } |
-        ForEach-Object {
-            $done += [int]$_
-            $percent = 1 + [Math]::Round(99 * $done / $overall, 1)
-            Write-Progress -Activity "building stl files" -Status "$done / $overall - $($percent.ToString("0.0")) %" -PercentComplete $percent
-        }
-        Write-Progress -Activity "building stl files" -Completed
-
-
-    # wait for process to finish
     Get-Process openscad -ErrorAction SilentlyContinue |
         ForEach-Object `
             -Begin   { Start-Sleep -Seconds 1 } `
@@ -192,84 +234,114 @@ if ($BuildStls) {
     Pop-Location
 }
 
-if ($BuildHtml) {
-# @"
-# layout: page
-# title: "PAGE-TITLE"
+if ($BuildImages) {
+    Push-Location $PSScriptRoot/Images
 
-# # Gridfinity UltraLight STL Files
+    Get-Process openscad -ErrorAction SilentlyContinue |
+        Stop-Process -Force
 
-# $(
-#     Write-Progress -Activity "building index.md" -PercentComplete 1
+    Clear-Directory . -Filter *.png
 
-#     $done = 0
-#     $overall = ($json | Measure-Object).Count
-#     $json | 
-#         ForEach-Object {
-#             [ordered]@{
-#                 Size = $_.Grids_X
-#                 Bins = $_.Dividers_X + 1
-#                 Scoop = $(if ($_.Scoops) {"✅"} else {""})
-#                 Print = "orcaslicer://open?file=$($_.filename).stl"
-#             }
-#         } |
-#         ForEach-Object {
-#             if ($done -eq 0) {
-#                 $col = 0
-#                 $header = $_.GetEnumerator() | 
-#                     ForEach-Object { " $($_.Name) " } |
-#                     ForEach-Object {
-#                         $r = $_
-#                         switch($col) {
-#                             3       { $r.PadRight(47)  }
-#                             default { $r } 
-#                         }
-#                         $col++
-#                     }
-                
-#                 "|$($header -join "|")|"
-#                 "|$(($header | ForEach-Object {''.PadLeft($_.Length, '-')}) -join '|' )|"
-#             }
+    Get-Configurations -Activity "building image files" -Delay |
+        ForEach-Object -Parallel {
+            $stl      = $_.Paths.Stl.Replace("\", "/")
+            $filename = $_.filename
+            $openscad = $_.OpenScad
+            $scadFile = $_.Paths.Temp + "\" + [System.IO.Path]::ChangeExtension([System.IO.Path]::GetRandomFileName(), ".scad")
+            
+            if (!(Test-Path "$filename.png")) {
+                $process = Get-Process openscad -ErrorAction SilentlyContinue
+                if ($null -ne $process.Name) {
+                    while ((Get-Process openscad | Measure-Object).Count -ge $using:Processes) {
+                        Start-Sleep -Seconds 1
+                    }
+                }
 
-#             $col = 0
-#             $row = $_.GetEnumerator() | 
-#                     ForEach-Object { " $($_.Value) " } |
-#                     ForEach-Object {
-#                         $r = $_
-#                         switch($col) {
-#                             2       { $r.PadLeft($header[$col].Length - 1) } 
-#                             3       { $r.PadRight($header[$col].Length)  }
-#                             default { $r.PadLeft($header[$col].Length) } 
-#                         }
-#                         $col++
-#                     }
+                @(
+                    # '$vpt = [0, 0, 0];'
+                    # '$vpd = 500;'
+                    # '$vpr = [35, 0, 350];'
+                    'color("DarkCyan")'
+                    "import(`"$stl`");"
+                ) |
+                    Set-Content $scadFile
 
-#             "|$($row -join "|")|"
+                ". '$($openscad.Path)' '$scadFile' --imgsize=300,200 --projection ortho --colorscheme Tomorrow -o '$filename.png'" |
+                    ForEach-Object {
+                        if ($using:Debug) {
+                            Write-Host -ForegroundColor Yellow $_
+                        }
+                        Write-Host -ForegroundColor Green "building $filename.png"
+                        Invoke-Expression $_
+                    }
+            }
+        } 
 
-#             $done += 1
-#             $percent = 1 + [Math]::Round(99 * $done / $overall, 1)
-#             Write-Progress -Activity "building index.md" -Status "$done / $overall - $($percent.ToString("0.0")) %" -PercentComplete $percent
-#         } |
-#         Join-String -Separator "`n"
-# )
-# "@ |
-$json | 
-    ForEach-Object {
-        [PSCustomObject]@{
-            Name = [System.IO.Path]::GetFileName($_.filename)
-            Size = $_.Grids_X
-            Bins = $_.Dividers_X + 1
-            Scoop = $(if ($_.Scoops -eq "true") {"✅"} else {""})
-            Print = "<a href='orcaslicer://open?file=$($_.filename).stl'>Print</a>"
-        }
-    } |
-    Sort-Object Name |
-    ConvertTo-Html -Fragment |
-    ForEach-Object { $_.Replace("&lt;", "<") } |
-    ForEach-Object { $_.Replace("&gt;", ">") } |
-    ForEach-Object { $_.Replace("&#39;", "'") } |
-    Set-Content -Path "$PSScriptRoot/index.md"
-    Write-Progress -Activity "building index.md" -Completed
+    Get-Process openscad -ErrorAction SilentlyContinue |
+        ForEach-Object `
+            -Begin   { Start-Sleep -Seconds 1 } `
+            -Process { $_.WaitForExit() }
+
+    Remove-Item -Recurse -Force $tempdir
+    Pop-Location
+}
+
+if ($BuildMarkdown) {
+@"
+# Gridfinity UltraLight STL Files
+
+$(
+    $data = Get-Configurations -Activity "building index.md" | 
+        ForEach-Object {
+            [ordered]@{
+                Size = $_.Grids_X
+                Bins = $_.Dividers_X + 1
+                Scoop = $(if ($_.Scoops) {"✅"} else {""})
+                Print = "[Print](orcaslicer://open?file=$($_.filename).stl)"
+            }
+        }    
     
+    # header
+    $data | 
+        Select-Object -First 1 |
+        ForEach-Object {
+            $col = 0
+            $header = $_.GetEnumerator() | 
+                ForEach-Object { " $($_.Name) " } |
+                ForEach-Object {
+                    $r = $_
+                    switch($col) {
+                        3       { $r.PadRight(47)  }
+                        default { $r } 
+                    }
+                    $col++
+                }
+            
+            "|$($header -join "|")|"
+            "|$(($header | ForEach-Object {''.PadLeft($_.Length, '-')}) -join '|' )|"
+        }    
+    
+    #rows
+    $data |
+        ForEach-Object {
+            $col = 0
+            $row = $_.GetEnumerator() | 
+                    ForEach-Object { " $($_.Value) " } |
+                    ForEach-Object {
+                        $r = $_
+                        switch($col) {
+                            2       { $r.PadLeft($header[$col].Length - 1) } 
+                            3       { $r.PadRight($header[$col].Length)  }
+                            default { $r.PadLeft($header[$col].Length) } 
+                        }
+                        $col++
+                    }
+
+            "|$($row -join "|")|"
+        } |
+        Join-String -Separator "`n"
+)
+"@ |
+    Set-Content -Path "$PSScriptRoot/index.md"
     Get-Content -Path "$PSScriptRoot/index.md"
 }
