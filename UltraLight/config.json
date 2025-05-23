@@ -1,0 +1,29 @@
+{
+    "fileFormatVersion": "1",
+    "parameterSets": {
+        "make.ps1": {
+            "Dividers": "false",
+            "Dividers_X": "0",
+            "Dividers_Y": "0",
+            "Grids_X": "1",
+            "Grids_Y": "1",
+            "Grids_Z": "6",
+            "Half_Grid_Base": "false",
+            "Half_Grid_Right": "true",
+            "Half_Grid_Top": "true",
+            "Label_Depth": "13",
+            "Label_For_Each_Section": "true",
+            "Label_Position": "Full",
+            "Label_Width": "30",
+            "Labels": "true",
+            "Magnet_Depth": "2.2000000000000002",
+            "Magnet_Diameter": "6.1500000000000004",
+            "Magnets": "false",
+            "Scoop_Radius": "15",
+            "Scoops": "false",
+            "Ultra_Light_Base": "true",
+            "Ultra_Light_Labels": "true",
+            "Wall_Thickness": "1"
+        }
+    }
+}

@@ -37,7 +37,7 @@ if ($Update) {
 } elseif ($version_installed -lt $version_online) {
     Write-Host -ForegroundColor Yellow "********************************************************************************"
     Write-Host -ForegroundColor Yellow "* $("New OpenScad Nightly available: $version_online (installed: $version_installed)".PadRight(76)) *"
-    Write-Host -ForegroundColor Yellow "* $("Run  $($MyInvocation.MyCommand) -UpdateOpenScad  to install.".PadRight(76))*"
+    Write-Host -ForegroundColor Yellow "* $("Run  $($MyInvocation.MyCommand) -Update  to install.".PadRight(76))*"
     Write-Host -ForegroundColor Yellow "********************************************************************************"
     Write-Host -ForegroundColor Yellow ""
 }
