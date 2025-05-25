@@ -1,12 +1,15 @@
-include <gridfinity-rebuilt-utility.scad>
-
 // ===== INFORMATION ===== //
 /*
- IMPORTANT: rendering will be better for analyzing the model if fast-csg is enabled. As of writing, this feature is only available in the development builds and not the official release of OpenSCAD, but it makes rendering only take a couple seconds, even for comically large bins. Enable it in Edit > Preferences > Features > fast-csg
+ IMPORTANT: rendering will be better in development builds and not the official release of OpenSCAD, but it makes rendering only take a couple seconds, even for comically large bins.
 
 https://github.com/kennetek/gridfinity-rebuilt-openscad
 
 */
+
+include <src/core/standard.scad>
+use <src/core/gridfinity-rebuilt-utility.scad>
+use <src/core/gridfinity-rebuilt-holes.scad>
+use <src/helpers/generic-helpers.scad>
 
 // ===== PARAMETERS ===== //
 
@@ -16,11 +19,13 @@ $fs = 0.25;
 
 /* [General Settings] */
 // number of bases along x-axis
-gridx = 3;  
-// number of bases along y-axis   
-gridy = 3;  
-// bin height. See bin height information and "gridz_define" below.  
+gridx = 3;
+// number of bases along y-axis
+gridy = 3;
+// bin height. See bin height information and "gridz_define" below.
 gridz = 6;
+// Half grid sized bins.  Implies "only corners".
+half_grid = false;
 
 /* [Compartments] */
 // number of X Divisions
@@ -41,57 +46,59 @@ gridz_define = 0; // [0:gridz is the height of bins in units of 7mm increments -
 style_tab = 1; //[0:Full,1:Auto,2:Left,3:Center,4:Right,5:None]
 
 /* [Base] */
-style_hole = 0; // [0:no holes, 1:magnet holes only, 2: magnet and screw holes - no printable slit, 3: magnet and screw holes - printable slit]
-// only cut magnet/screw holes at the corners of the bin to save uneccesary print time
-only_corners = false;
-// number of divisions per 1 unit of base along the X axis. (default 1, only use integers. 0 means automatically guess the right division)
-div_base_x = 0;
-// number of divisions per 1 unit of base along the Y axis. (default 1, only use integers. 0 means automatically guess the right division)
-div_base_y = 0; 
 // thickness of bottom layer
 bottom_layer = 1;
 
+/* [Base Hole Options] */
+// only cut magnet/screw holes at the corners of the bin to save uneccesary print time
+only_corners = false;
+//Use gridfinity refined hole style. Not compatible with magnet_holes!
+refined_holes = false;
+// Base will have holes for 6mm Diameter x 2mm high magnets.
+magnet_holes = true;
+// Base will have holes for M3 screws.
+screw_holes = true;
+// Magnet holes will have crush ribs to hold the magnet.
+crush_ribs = true;
+// Magnet/Screw holes will have a chamfer to ease insertion.
+chamfer_holes = true;
+// Magnet/Screw holes will be printed so supports are not needed.
+printable_hole_top = true;
+
+hole_options = bundle_hole_options(refined_holes, magnet_holes, screw_holes, crush_ribs, chamfer_holes, printable_hole_top);
+grid_dimensions = GRID_DIMENSIONS_MM / (half_grid ? 2 : 1);
 
 // ===== IMPLEMENTATION ===== //
 
 // Input all the cutter types in here
 color("tomato")
-gridfinityLite(gridx, gridy, gridz, gridz_define, style_lip, enable_zsnap, l_grid, div_base_x, div_base_y, style_hole, only_corners) {
+render()
+gridfinityLite(gridx, gridy, gridz, gridz_define, style_lip, enable_zsnap, grid_dimensions, hole_options, only_corners || half_grid) {
     cutEqual(n_divx = divx, n_divy = divy, style_tab = style_tab, scoop_weight = 0);
 }
 
 // ===== CONSTRUCTION ===== //
 
+module gridfinityLite(gridx, gridy, gridz, gridz_define, style_lip, enable_zsnap, grid_dimensions, style_hole, only_corners) {
+    height_mm = height(gridz, gridz_define, style_lip, enable_zsnap);
 
-module gridfinityLite(gridx, gridy, gridz, gridz_define, style_lip, enable_zsnap, length, div_base_x, div_base_y, style_hole, only_corners) { 
+    // Lower the bin start point by this amount.
+    // Made up for in bin height.
+    // Ensures divider walls smoothly transition to the bottom
+    lower_by_mm = BASE_HEIGHT + bottom_layer;
+
     difference() {
-        union() {
-            gridfinityInit(gridx, gridy, height(gridz, gridz_define, style_lip, enable_zsnap), 0, length)
-            children();
-            gridfinityBase(gridx, gridy, length, div_base_x, div_base_y, style_hole, only_corners=only_corners);
-        }
+        translate([0, 0, -lower_by_mm])
+        gridfinityInit(gridx, gridy, height_mm+lower_by_mm, 0, grid_dimensions, sl=style_lip)
+        children();
 
+        // Underside of the base. Keep out zone.
+        render()
         difference() {
-            union() {
-                intersection() {
-                    difference() {
-                        gridfinityBase(gridx, gridy, length, div_base_x, div_base_y, style_hole, -d_wall*2, false, only_corners=only_corners);
-                        translate([-gridx*length/2,-gridy*length/2,2*h_base])
-                        cube([gridx*length,gridy*length,1000]);
-                    }
-                    translate([0,0,-1])
-                    rounded_rectangle(gridx*length-0.5005-d_wall*2, gridy*length-0.5005-d_wall*2, 1000, r_f2);
-                    translate([0,0,bottom_layer])
-                    rounded_rectangle(gridx*1000, gridy*1000, 1000, r_f2);
-                }
-                translate([0,0,h_base+d_clear])
-                rounded_rectangle(gridx*length-0.5005-d_wall*2, gridy*length-0.5005-d_wall*2, h_base, r_f2);
-            }
-
-            translate([0,0,-4*h_base])
-            gridfinityInit(gridx, gridy, height(20,0), 0, length)
-            children();
+            cube([gridx*grid_dimensions.x, gridy*grid_dimensions.y, BASE_HEIGHT*2], center=true);
+            gridfinityBase([gridx, gridy], grid_dimensions, hole_options=style_hole, only_corners=only_corners);
         }
-
     }
+
+    gridfinity_base_lite([gridx, gridy], grid_dimensions, d_wall, bottom_layer, hole_options=style_hole, only_corners=only_corners);
 }
